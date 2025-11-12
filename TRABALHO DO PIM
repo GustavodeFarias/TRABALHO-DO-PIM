@@ -1,349 +1,684 @@
 import tkinter as tk
-from tkinter import messagebox, ttk
-import sqlite3
-import re
-import bcrypt
+from tkinter import ttk, messagebox, simpledialog, scrolledtext, filedialog
 import json
 import os
+import datetime
 import random
-import smtplib
-from email.mime.text import MIMEText
-from cryptography.fernet import Fernet
+from PIL import Image, ImageTk
+import threading
+import time
 
-# Função para gerar uma chave de criptografia
-def generate_key():
-    return Fernet.generate_key()
 
-# Função para criptografar dados
-def encrypt_data(data):
-    key = generate_key()
-    fernet = Fernet(key)
-    encrypted_data = fernet.encrypt(data.encode())
-    return encrypted_data, key
-
-# Função para descriptografar dados
-def decrypt_data(encrypted_data, key):
-    fernet = Fernet(key)
-    decrypted_data = fernet.decrypt(encrypted_data).decode()
-    return decrypted_data
-
-# Função para criar ou conectar ao banco de dados
-def create_connection():
-    conn = sqlite3.connect('users.db')
-    return conn
-
-# Função para criar as tabelas necessárias
-def create_tables():
-    conn = create_connection()
-    cursor = conn.cursor()
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS users (
-            id INTEGER PRIMARY KEY,
-            username TEXT UNIQUE,
-            password TEXT,
-            name TEXT,
-            age INTEGER,
-            email TEXT,
-            is_verified INTEGER DEFAULT 0,
-            verification_code TEXT
-        )
-    ''')
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS feedback (
-            id INTEGER PRIMARY KEY,
-            user_id INTEGER,
-            comment TEXT,
-            FOREIGN KEY (user_id) REFERENCES users (id)
-        )
-    ''')
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS courses (
-            id INTEGER PRIMARY KEY,
-            title TEXT,
-            description TEXT
-        )
-    ''')
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS user_courses (
-            user_id INTEGER,
-            course_id INTEGER,
-            progress INTEGER DEFAULT 0,
-            FOREIGN KEY (user_id) REFERENCES users (id),
-            FOREIGN KEY (course_id) REFERENCES courses (id)
-        )
-    ''')
-    conn.commit()
-    conn.close()
-
-# Função para enviar e-mail de verificação
-def send_verification_email(email, code):
-    msg = MIMEText(f'Seu código de verificação é: {code}')
-    msg['Subject'] = 'Verificação de E-mail'
-    msg['From'] = 'seu_email@example.com'  # Substitua pelo seu e-mail
-    msg['To'] = email
-
-    with smtplib.SMTP('smtp.example.com', 587) as server:  # Substitua pelo servidor SMTP
-        server.starttls()
-        server.login('seu_email@example.com', 'sua_senha')  # Substitua pelo seu e-mail e senha
-        server.send_message(msg)
-
-# Função para registrar um novo usuário
-def register_user(username, password, name, age, email):
-    conn = create_connection()
-    cursor = conn.cursor()
-    try:
-        hashed_password = bcrypt.hashpw(password.encode(), bcrypt.gensalt())
-        verification_code = str(random.randint(100000, 999999))
-        cursor.execute('''
-            INSERT INTO users (username, password, name, age, email, verification_code)
-            VALUES (?, ?, ?, ?, ?, ?)
-        ''', (username, hashed_password, name, age, email, verification_code))
-        conn.commit()
-        send_verification_email(email, verification_code)
-        messagebox.showinfo("Sucesso", "Usuário registrado com sucesso! Verifique seu e-mail para o código de verificação.")
-    except sqlite3.IntegrityError:
-        messagebox.showwarning("Atenção", "Nome de usuário já existe.")
-    finally:
-        conn.close()
-
-# Função para autenticar o usuário
-def authenticate(username, password):
-    conn = create_connection()
-    cursor = conn.cursor()
-    cursor.execute('SELECT * FROM users WHERE username=?', (username,))
-    user = cursor.fetchone()
-    conn.close()
-    if user and bcrypt.checkpw(password.encode(), user[2].encode()):
-        return user
-    return None
-
-# Função para verificar o código de verificação
-def verify_code(user_id, code):
-    conn = create_connection()
-    cursor = conn.cursor()
-    cursor.execute('SELECT verification_code FROM users WHERE id=?', (user_id,))
-    stored_code = cursor.fetchone()
-    if stored_code and stored_code[0] == code:
-        cursor.execute('UPDATE users SET is_verified=1 WHERE id=?', (user_id,))
-        conn.commit()
-        messagebox.showinfo("Sucesso", "E-mail verificado com sucesso!")
-    else:
-        messagebox.showwarning("Atenção", "Código de verificação inválido.")
-    conn.close()
-
-# Função para salvar dados do usuário
-def save_data():
-    user_data = {
-        "name": entry_name.get(),
-        "age": entry_age.get(),
-        "email": entry_email.get()
-    }
-    
-    if not all(user_data.values()):
-        messagebox.showwarning("Atenção", "Por favor, preencha todos os campos.")
-        return
-    
-    if not re.match(r"[^@]+@[^@]+\.[^@]+", user_data['email']):
-        messagebox.showwarning("Atenção", "Email inválido.")
-        return
-
-    encrypted_data, key = encrypt_data(json.dumps(user_data))
-    
-    with open('user_data.json', 'wb') as json_file:
-        json_file.write(encrypted_data)
-    
-    with open('key.key', 'wb') as key_file:
-        key_file.write(key)
-    
-    messagebox.showinfo("Sucesso", "Dados salvos com sucesso!")
-
-# Função para carregar dados do usuário
-def load_data():
-    if os.path.exists('user_data.json') and os.path.exists('key.key'):
-        with open('key.key', 'rb') as key_file:
-            key = key_file.read()
+class SistemaAcademico:
+    def __init__(self):
+        self.usuarios = {}
+        self.mensagens = []
+        self.notas = {}
+        self.eventos = []
+        self.arquivos = {}
+        self.usuario_logado = None
+        self.carregar_dados()
         
-        with open('user_data.json', 'rb') as json_file:
-            encrypted_data = json_file.read()
-            decrypted_data = decrypt_data(encrypted_data, key)
-            user_data = json.loads(decrypted_data)
+     
+        self.temas = {
+            "Claro": {"bg": "#ffffff", "fg": "#000000", "button_bg": "#4CAF50", "button_fg": "white"},
+            "Escuro": {"bg": "#2c3e50", "fg": "#ecf0f1", "button_bg": "#3498db", "button_fg": "white"},
+            "Azul": {"bg": "#e8f4f8", "fg": "#2c3e50", "button_bg": "#2980b9", "button_fg": "white"}
+        }
+        self.tema_atual = "Claro"
+
+    def carregar_dados(self):
+        try:
+            if os.path.exists("dados_academicos.json"):
+                with open("dados_academicos.json", "r", encoding='utf-8') as f:
+                    data = json.load(f)
+                    self.usuarios = data.get("usuarios", {})
+                    self.mensagens = data.get("mensagens", [])
+                    self.notas = data.get("notas", {})
+                    self.eventos = data.get("eventos", [])
+                    self.arquivos = data.get("arquivos", {})
+        except Exception as e:
             
-            entry_name.delete(0, tk.END)
-            entry_age.delete(0, tk.END)
-            entry_email.delete(0, tk.END)
-            entry_name.insert(0, user_data['name'])
-            entry_age.insert(0, user_data['age'])
-            entry_email.insert(0, user_data['email'])
+            try:
+                messagebox.showerror("Erro", f"Erro ao carregar dados: {e}")
+            except:
+                print("Erro ao carregar dados:", e)
+
+    def salvar_dados(self):
+        try:
+            with open("dados_academicos.json", "w", encoding='utf-8') as f:
+                json.dump({
+                    "usuarios": self.usuarios,
+                    "mensagens": self.mensagens,
+                    "notas": self.notas,
+                    "eventos": self.eventos,
+                    "arquivos": self.arquivos
+                }, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            try:
+                messagebox.showerror("Erro", f"Erro ao salvar dados: {e}")
+            except:
+                print("Erro ao salvar dados:", e)
+
+
+sistema = SistemaAcademico()
+
+
+MATERIAIS = {
+    "python": {
+        "livros": ["Python Crash Course", "Fluent Python", "Automate the Boring Stuff"],
+        "cursos": ["Python para Iniciantes", "Data Science com Python", "Web Development Django"],
+        "artigos": ["Estruturas de Dados", "OOP em Python", "Testes Unitários"]
+    },
+    "ia": {
+        "livros": ["Hands-On Machine Learning", "Deep Learning", "Pattern Recognition"],
+        "cursos": ["Machine Learning Básico", "Deep Learning Avançado", "NLP com Python"],
+        "artigos": ["Redes Neurais Convolucionais", "Algoritmos Genéticos", "Reinforcement Learning"]
+    },
+    "matematica": {
+        "livros": ["Cálculo I", "Álgebra Linear", "Estatística Aplicada"],
+        "cursos": ["Cálculo Diferencial", "Álgebra para CS", "Probabilidade"],
+        "artigos": ["Teoria dos Grafos", "Otimização Matemática", "Análise Numérica"]
+    }
+}
+
+RESPOSTAS_IA = {
+    "como estudar": "📚 Crie um cronograma de estudos, use a técnica Pomodoro (25min estudo, 5min descanso) e revise regularmente.",
+    "python": "🐍 Python é excelente para iniciantes! Pratique com projetos pequenos e participe de comunidades como PyLadies.",
+    "ia": "🤖 IA envolve Machine Learning, Deep Learning e NLP. Comece com regressão linear e evolua para redes neurais.",
+    "matematica": "🧮 Matemática é fundamental! Foque em álgebra, cálculo, estatística e lógica matemática.",
+    "prova": "📝 Para provas: revise os conceitos principais, resolva exercícios anteriores e descanse bem antes.",
+    "tcc": "🎓 Para TCC: defina um tema claro, faça um cronograma rigoroso e busque orientação constante.",
+    "estagio": "💼 Estágio: atualize seu LinkedIn, prepare um bom currículo e pratique entrevistas."
+}
+
+
+def validar_email(email):
+    return '@' in email and '.' in email.split('@')[-1]
+
+def validar_senha(senha):
+    return len(senha) >= 6
+
+def cadastrar_usuario():
+    nome = simpledialog.askstring("Cadastro", "Digite seu nome completo:")
+    if not nome:
+        return
+        
+    email = simpledialog.askstring("Cadastro", "Digite seu email:")
+    if not email or not validar_email(email):
+        messagebox.showwarning("Erro", "Email inválido!")
+        return
+        
+    senha = simpledialog.askstring("Cadastro", "Digite sua senha (mínimo 6 caracteres):", show="*")
+    if not senha or not validar_senha(senha):
+        messagebox.showwarning("Erro", "Senha deve ter pelo menos 6 caracteres!")
+        return
+        
+    perfil = simpledialog.askstring("Cadastro", "Perfil (aluno/professor/administrador):")
+    if perfil not in ["aluno", "professor", "administrador"]:
+        messagebox.showwarning("Erro", "Perfil deve ser: aluno, professor ou administrador!")
+        return
+
+    if email in sistema.usuarios:
+        messagebox.showwarning("Erro", "Usuário já cadastrado!")
     else:
-        messagebox.showwarning("Atenção", "Nenhum dado encontrado.")
+        sistema.usuarios[email] = {
+            "nome": nome,
+            "senha": senha,
+            "perfil": perfil,
+            "data_cadastro": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "ultimo_login": None
+        }
+        messagebox.showinfo("Sucesso", f"Usuário {nome} cadastrado com sucesso!")
+        sistema.salvar_dados()
+        atualizar_interface()
 
-# Função para exibir estatísticas
-def show_statistics():
-    if os.path.exists('user_data.json'):
-        with open('key.key', 'rb') as key_file:
-            key = key_file.read()
-        
-        with open('user_data.json', 'rb') as json_file:
-            encrypted_data = json_file.read()
-            decrypted_data = decrypt_data(encrypted_data, key)
-            user_data = json.loads(decrypted_data)
-            messagebox.showinfo("Estatísticas", f"Nome: {user_data['name']}\nIdade: {user_data['age']}\nEmail: {user_data['email']}")
-    else:
-        messagebox.showwarning("Atenção", "Nenhum dado encontrado.")
-
-# Função para criar a interface de feedback
-def feedback():
-    feedback_window = tk.Toplevel(root)
-    feedback_window.title("Feedback")
-
-    label_comment = tk.Label(feedback_window, text="Comentário:")
-    label_comment.pack(pady=5)
-    entry_comment = tk.Entry(feedback_window)
-    entry_comment.pack(pady=5)
-
-    def submit_feedback():
-        comment = entry_comment.get()
-        if not comment:
-            messagebox.showwarning("Atenção", "Por favor, insira um comentário.")
-            return
-        
-        user_id = 1  # Aqui você deve pegar o ID do usuário autenticado
-        conn = create_connection()
-        cursor = conn.cursor()
-        cursor.execute('INSERT INTO feedback (user_id, comment) VALUES (?, ?)', (user_id, comment))
-        conn.commit()
-        conn.close()
-        messagebox.showinfo("Sucesso", "Feedback enviado com sucesso!")
-        feedback_window.destroy()
-
-    button_submit = tk.Button(feedback_window, text="Enviar", command=submit_feedback)
-    button_submit.pack(pady=10)
-
-# Função para criar a interface de registro
-def register():
-    register_window = tk.Toplevel(root)
-    register_window.title("Registro")
-
-    label_username = tk.Label(register_window, text="Usuário:")
-    label_username.pack(pady=5)
-    entry_username = tk.Entry(register_window)
-    entry_username.pack(pady=5)
-
-    label_password = tk.Label(register_window, text="Senha:")
-    label_password.pack(pady=5)
-    entry_password = tk.Entry(register_window, show='*')
-    entry_password.pack(pady=5)
-
-    label_name = tk.Label(register_window, text="Nome:")
-    label_name.pack(pady=5)
-    entry_name = tk.Entry(register_window)
-    entry_name.pack(pady=5)
-
-    label_age = tk.Label(register_window, text="Idade:")
-    label_age.pack(pady=5)
-    entry_age = tk.Entry(register_window)
-    entry_age.pack(pady=5)
-
-    label_email = tk.Label(register_window, text="Email:")
-    label_email.pack(pady=5)
-    entry_email = tk.Entry(register_window)
-    entry_email.pack(pady=5)
-
-    def submit_registration():
-        username = entry_username.get()
-        password = entry_password.get()
-        name = entry_name.get()
-        age = entry_age.get()
-        email = entry_email.get()
-        
-        if not all([username, password, name, age, email]):
-            messagebox.showwarning("Atenção", "Por favor, preencha todos os campos.")
-            return
-        
-        if not re.match(r"[^@]+@[^@]+\.[^@]+", email):
-            messagebox.showwarning("Atenção", "Email inválido.")
-            return
-        
-        register_user(username, password, name, age, email)
-        register_window.destroy()
-
-    button_register = tk.Button(register_window, text="Registrar", command=submit_registration)
-    button_register.pack(pady=10)
-
-# Função para criar a interface de login
 def login():
-    login_window = tk.Toplevel(root)
-    login_window.title("Login")
+    email = simpledialog.askstring("Login", "Digite seu email:")
+    senha = simpledialog.askstring("Login", "Digite sua senha:", show="*")
 
-    label_username = tk.Label(login_window, text="Usuário:")
-    label_username.pack(pady=5)
-    entry_username = tk.Entry(login_window)
-    entry_username.pack(pady=5)
+    if email in sistema.usuarios and sistema.usuarios[email]["senha"] == senha:
+        sistema.usuario_logado = email
+        sistema.usuarios[email]["ultimo_login"] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        messagebox.showinfo("Bem-vindo", f"Olá, {sistema.usuarios[email]['nome']}!\nPerfil: {sistema.usuarios[email]['perfil'].capitalize()}")
+        sistema.salvar_dados()
+        atualizar_interface()
+    else:
+        messagebox.showerror("Erro", "Email ou senha inválidos!")
 
-    label_password = tk.Label(login_window, text="Senha:")
-    label_password.pack(pady=5)
-    entry_password = tk.Entry(login_window, show='*')
-    entry_password.pack(pady=5)
+def logout():
+    sistema.usuario_logado = None
+    messagebox.showinfo("Logout", "Você saiu da sua conta.")
+    atualizar_interface()
 
-    def authenticate_user():
-        username = entry_username.get()
-        password = entry_password.get()
-        user = authenticate(username, password)
-        if user:
-            if user[6] == 0:  # Verifica se o e-mail foi verificado
-                messagebox.showwarning("Atenção", "Por favor, verifique seu e-mail antes de fazer login.")
-                return
-            messagebox.showinfo("Sucesso", "Login bem-sucedido!")
-            login_window.destroy()
-            # Aqui você pode carregar dados do usuário ou abrir a interface principal
+def postar_mensagem():
+    if not sistema.usuario_logado:
+        messagebox.showwarning("Acesso negado", "Você precisa fazer login primeiro!")
+        return
+        
+    msg = simpledialog.askstring("Fórum", "Digite sua mensagem:")
+    if msg:
+        timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        mensagem_completa = f"[{timestamp}] {sistema.usuarios[sistema.usuario_logado]['nome']}: {msg}"
+        sistema.mensagens.append(mensagem_completa)
+        messagebox.showinfo("Sucesso", "Mensagem postada no fórum!")
+        sistema.salvar_dados()
+        atualizar_interface()
+
+def ver_forum():
+    if not sistema.mensagens:
+        messagebox.showinfo("Fórum", "Nenhuma mensagem ainda.")
+    else:
+        janela_forum = tk.Toplevel(root)
+        janela_forum.title("Fórum Acadêmico - Todas as Mensagens")
+        janela_forum.geometry("600x400")
+        
+        texto = scrolledtext.ScrolledText(janela_forum, wrap=tk.WORD, width=70, height=20)
+        texto.pack(padx=10, pady=10, fill=tk.BOTH, expand=True)
+        
+        for msg in sistema.mensagens:
+            texto.insert(tk.END, msg + "\n" + "-"*50 + "\n")
+        
+        texto.config(state=tk.DISABLED)
+
+def ver_minhas_mensagens():
+    if not sistema.usuario_logado:
+        messagebox.showwarning("Acesso negado", "Você precisa fazer login primeiro!")
+        return
+        
+    nome_usuario = sistema.usuarios[sistema.usuario_logado]['nome']
+    minhas_mensagens = [msg for msg in sistema.mensagens if nome_usuario in msg]
+    
+    if not minhas_mensagens:
+        messagebox.showinfo("Minhas Mensagens", "Você ainda não postou mensagens.")
+    else:
+        janela = tk.Toplevel(root)
+        janela.title("Minhas Mensagens")
+        janela.geometry("500x300")
+        
+        texto = scrolledtext.ScrolledText(janela, wrap=tk.WORD, width=60, height=15)
+        texto.pack(padx=10, pady=10, fill=tk.BOTH, expand=True)
+        
+        for msg in minhas_mensagens:
+            texto.insert(tk.END, msg + "\n" + "="*50 + "\n")
+        
+        texto.config(state=tk.DISABLED)
+
+def chat_ia():
+    pergunta = simpledialog.askstring("Assistente I.A", "Digite sua dúvida ou assunto:")
+    if not pergunta:
+        return
+
+    pergunta = pergunta.lower()
+    
+   
+    resposta = "🤖 Estou aqui para ajudar! Aqui estão algumas dicas gerais:\n\n"
+    resposta += "• Organize seu tempo de estudo\n"
+    resposta += "• Participe ativamente das discussões\n"
+    resposta += "• Não hesite em pedir ajuda\n"
+    resposta += "• Revise o material regularmente\n\n"
+    
+    for chave in RESPOSTAS_IA:
+        if chave in pergunta:
+            resposta = RESPOSTAS_IA[chave]
+            break
+            
+    
+    if "python" in pergunta:
+        resposta += "\n\n📚 Recomendações Python:\n"
+        resposta += "• Livro: Python Crash Course\n"
+        resposta += "• Curso: Python para Iniciantes\n"
+        resposta += "• Projeto: Crie um jogo simples"
+    
+    messagebox.showinfo("Assistente I.A Acadêmico", resposta)
+
+def recomendar_materiais():
+    areas = list(MATERIAIS.keys())
+    area = simpledialog.askstring("Recomendações", f"Digite a área ({', '.join(areas)}):")
+    
+    if area and area.lower() in MATERIAIS:
+        material = MATERIAIS[area.lower()]
+        texto = f"📚 Materiais para {area.upper()}:\n\n"
+        
+        texto += "📖 LIVROS:\n"
+        for livro in material['livros']:
+            texto += f"• {livro}\n"
+            
+        texto += "\n🎓 CURSOS:\n"
+        for curso in material['cursos']:
+            texto += f"• {curso}\n"
+            
+        texto += "\n📄 ARTIGOS:\n"
+        for artigo in material['artigos']:
+            texto += f"• {artigo}\n"
+            
+        messagebox.showinfo("Materiais Recomendados", texto)
+    else:
+        messagebox.showerror("Erro", f"Área não encontrada. Tente: {', '.join(areas)}")
+
+def gerenciar_notas():
+    if not sistema.usuario_logado or sistema.usuarios[sistema.usuario_logado]['perfil'] not in ['professor', 'administrador']:
+        messagebox.showwarning("Acesso negado", "Apenas professores e administradores podem gerenciar notas!")
+        return
+        
+    janela = tk.Toplevel(root)
+    janela.title("Sistema de Notas")
+    janela.geometry("400x300")
+    
+    tk.Label(janela, text="Sistema de Gestão de Notas", font=("Arial", 14)).pack(pady=10)
+    
+    tk.Button(janela, text="Adicionar Nota", command=adicionar_nota, width=20).pack(pady=5)
+    tk.Button(janela, text="Consultar Notas", command=consultar_notas, width=20).pack(pady=5)
+    tk.Button(janela, text="Estatísticas", command=estatisticas_notas, width=20).pack(pady=5)
+
+def adicionar_nota():
+    aluno = simpledialog.askstring("Notas", "Email do aluno:")
+    if aluno not in sistema.usuarios:
+        messagebox.showerror("Erro", "Aluno não encontrado!")
+        return
+        
+    disciplina = simpledialog.askstring("Notas", "Disciplina:")
+    nota = simpledialog.askfloat("Notas", "Nota (0-10):")
+    
+    if nota is None:
+        return
+    if nota < 0 or nota > 10:
+        messagebox.showerror("Erro", "Nota deve estar entre 0 e 10!")
+        return
+        
+    if aluno not in sistema.notas:
+        sistema.notas[aluno] = []
+        
+    sistema.notas[aluno].append({
+        "disciplina": disciplina,
+        "nota": nota,
+        "data": datetime.datetime.now().strftime("%Y-%m-%d"),
+        "professor": sistema.usuarios[sistema.usuario_logado]['nome']
+    })
+    
+    messagebox.showinfo("Sucesso", f"Nota {nota} adicionada para {sistema.usuarios[aluno]['nome']}!")
+    sistema.salvar_dados()
+    atualizar_interface()
+
+def consultar_notas():
+    if sistema.usuario_logado:
+        aluno = sistema.usuario_logado
+        if aluno in sistema.notas:
+            texto = f"📊 Notas de {sistema.usuarios[aluno]['nome']}:\n\n"
+            for nota_info in sistema.notas[aluno]:
+                texto += f"📝 {nota_info['disciplina']}: {nota_info['nota']} ({nota_info['data']})\n"
+            messagebox.showinfo("Suas Notas", texto)
         else:
-            messagebox.showwarning("Atenção", "Usuário ou senha inválidos.")
+            messagebox.showinfo("Notas", "Nenhuma nota registrada ainda.")
+    else:
+        messagebox.showwarning("Acesso negado", "Faça login para ver suas notas!")
 
-    button_login = tk.Button(login_window, text="Entrar", command=authenticate_user)
-    button_login.pack(pady=10)
+def estatisticas_notas():
+    if not sistema.notas:
+        messagebox.showinfo("Estatísticas", "Nenhuma nota registrada ainda.")
+        return
+        
+    total_notas = sum(len(notas) for notas in sistema.notas.values())
+    media_geral = sum(nota_info['nota'] for notas in sistema.notas.values() for nota_info in notas) / total_notas
+    
+    texto = f"📈 Estatísticas de Notas:\n\n"
+    texto += f"• Total de notas: {total_notas}\n"
+    texto += f"• Média geral: {media_geral:.2f}\n"
+    texto += f"• Alunos com notas: {len(sistema.notas)}\n"
+    
+    messagebox.showinfo("Estatísticas", texto)
 
-# Criação da interface gráfica principal
-root = tk.Tk()
-root.title("Plataforma de Educação Digital Segura")
+def calendario_academico():
+    janela = tk.Toplevel(root)
+    janela.title("Calendário Acadêmico")
+    janela.geometry("400x300")
+    
+   
+    eventos = [
+        {"data": "2024-03-15", "evento": "Início do Semestre"},
+        {"data": "2024-04-20", "evento": "Prova Bimestral"},
+        {"data": "2024-06-15", "evento": "Recesso Acadêmico"},
+        {"data": "2024-07-20", "evento": "Término do Semestre"}
+    ]
+    
+    texto = scrolledtext.ScrolledText(janela, wrap=tk.WORD, width=40, height=15)
+    texto.pack(padx=10, pady=10, fill=tk.BOTH, expand=True)
+    
+    texto.insert(tk.END, "📅 CALENDÁRIO ACADÊMICO\n\n")
+    for evento in eventos:
+        texto.insert(tk.END, f"📌 {evento['data']}: {evento['evento']}\n")
+    
+    texto.config(state=tk.DISABLED)
 
-# Criação do banco de dados e tabelas
-create_tables()
+def upload_arquivo():
+    if not sistema.usuario_logado:
+        messagebox.showwarning("Acesso negado", "Faça login para upload de arquivos!")
+        return
+        
+    arquivo = filedialog.askopenfilename(
+        title="Selecionar Arquivo",
+        filetypes=[("Todos os arquivos", "*.*"), ("PDF", "*.pdf"), ("Documentos", "*.docx *.txt")]
+    )
+    
+    if arquivo:
+        nome_arquivo = os.path.basename(arquivo)
+        sistema.arquivos[nome_arquivo] = {
+            "usuario": sistema.usuario_logado,
+            "data_upload": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "tamanho": os.path.getsize(arquivo)
+        }
+        messagebox.showinfo("Sucesso", f"Arquivo '{nome_arquivo}' enviado com sucesso!")
+        sistema.salvar_dados()
+        atualizar_interface()
 
-# Botões de Login e Registro
-button_login = tk.Button(root, text="Login", command=login)
-button_login.pack(pady=10)
+def visualizar_arquivos():
+    if not sistema.arquivos:
+        messagebox.showinfo("Arquivos", "Nenhum arquivo enviado ainda.")
+        return
+        
+    janela = tk.Toplevel(root)
+    janela.title("Arquivos Compartilhados")
+    janela.geometry("500x300")
+    
+    texto = scrolledtext.ScrolledText(janela, wrap=tk.WORD, width=60, height=15)
+    texto.pack(padx=10, pady=10, fill=tk.BOTH, expand=True)
+    
+    texto.insert(tk.END, "📁 ARQUIVOS COMPARTILHADOS\n\n")
+    for nome_arquivo, info in sistema.arquivos.items():
+        usuario = sistema.usuarios.get(info['usuario'], {}).get('nome', info['usuario'])
+        texto.insert(tk.END, f"📄 {nome_arquivo}\n")
+        texto.insert(tk.END, f"   👤 Enviado por: {usuario}\n")
+        texto.insert(tk.END, f"   📅 Data: {info['data_upload']}\n")
+        texto.insert(tk.END, f"   📊 Tamanho: {info['tamanho']} bytes\n")
+        texto.insert(tk.END, "-"*50 + "\n")
+    
+    texto.config(state=tk.DISABLED)
 
-button_register = tk.Button(root, text="Registrar", command=register)
-button_register.pack(pady=10)
+def dashboard_usuario():
+    if not sistema.usuario_logado:
+        messagebox.showwarning("Acesso negado", "Faça login para acessar o dashboard!")
+        return
+        
+    usuario = sistema.usuarios[sistema.usuario_logado]
+    janela = tk.Toplevel(root)
+    janela.title("Dashboard Pessoal")
+    janela.geometry("400x300")
+    
+    texto = f"👤 DASHBOARD - {usuario['nome'].upper()}\n\n"
+    texto += f"📧 Email: {sistema.usuario_logado}\n"
+    texto += f"🎯 Perfil: {usuario['perfil'].capitalize()}\n"
+    texto += f"📅 Cadastro: {usuario['data_cadastro']}\n"
+    texto += f"🔐 Último login: {usuario.get('ultimo_login', 'Nunca')}\n\n"
+    
+   
+    if sistema.usuario_logado in sistema.notas:
+        notas = sistema.notas[sistema.usuario_logado]
+        media = sum(n['nota'] for n in notas) / len(notas)
+        texto += f"📊 Média das notas: {media:.2f}\n"
+    
+    mensagens_usuario = len([m for m in sistema.mensagens if usuario['nome'] in m])
+    texto += f"💬 Mensagens no fórum: {mensagens_usuario}\n"
+    
+    arquivos_usuario = len([a for a in sistema.arquivos.values() if a['usuario'] == sistema.usuario_logado])
+    texto += f"📁 Arquivos enviados: {arquivos_usuario}\n"
+    
+    label = tk.Label(janela, text=texto, justify=tk.LEFT, font=("Arial", 10))
+    label.pack(padx=20, pady=20)
 
-# Labels e Entradas
-label_name = tk.Label(root, text="Nome:")
-label_name.pack(pady=5)
-entry_name = tk.Entry(root)
-entry_name.pack(pady=5)
+def backup_dados():
+    try:
+        with open("backup_academico.json", "w", encoding='utf-8') as f:
+            json.dump({
+                "usuarios": sistema.usuarios,
+                "mensagens": sistema.mensagens,
+                "notas": sistema.notas,
+                "eventos": sistema.eventos,
+                "arquivos": sistema.arquivos
+            }, f, ensure_ascii=False, indent=2)
+        messagebox.showinfo("Backup", "Backup dos dados realizado com sucesso!")
+    except Exception as e:
+        messagebox.showerror("Erro", f"Falha no backup: {e}")
 
-label_age = tk.Label(root, text="Idade:")
-label_age.pack(pady=5)
-entry_age = tk.Entry(root)
-entry_age.pack(pady=5)
+def restaurar_dados():
+    try:
+        arquivo = filedialog.askopenfilename(
+            title="Selecionar Backup",
+            filetypes=[("JSON files", "*.json")]
+        )
+        if arquivo:
+            with open(arquivo, "r", encoding='utf-8') as f:
+                data = json.load(f)
+                sistema.usuarios = data.get("usuarios", {})
+                sistema.mensagens = data.get("mensagens", [])
+                sistema.notas = data.get("notas", {})
+                sistema.eventos = data.get("eventos", {})
+                sistema.arquivos = data.get("arquivos", {})
+            messagebox.showinfo("Restauração", "Dados restaurados com sucesso!")
+            sistema.salvar_dados()
+            atualizar_interface()
+    except Exception as e:
+        messagebox.showerror("Erro", f"Falha na restauração: {e}")
 
-label_email = tk.Label(root, text="Email:")
-label_email.pack(pady=5)
-entry_email = tk.Entry(root)
-entry_email.pack(pady=5)
+def mudar_tema(novo_tema):
+    if novo_tema not in sistema.temas:
+        messagebox.showwarning("Tema inválido", "Escolha um tema válido.")
+        return
+    sistema.tema_atual = novo_tema
+    atualizar_interface()
 
-# Botões
-button_save = tk.Button(root, text="Salvar Dados", command=save_data)
-button_save.pack(pady=10)
 
-button_load = tk.Button(root, text="Carregar Dados", command=load_data)
-button_load.pack(pady=10)
+def _apply_theme_to_widget(widget, tema):
+    """
+    Tenta aplicar bg/fg nos widgets compatíveis.
+    Funciona para tk widgets (Label, Frame, Button, Text/ScrolledText) e tenta para ttk via style.
+    """
+   
+    try:
+        classname = widget.winfo_class()
+    except:
+        return
 
-button_stats = tk.Button(root, text="Mostrar Estatísticas", command=show_statistics)
-button_stats.pack(pady=10)
+    
+    if isinstance(widget, scrolledtext.ScrolledText):
+        try:
+            widget.config(bg=tema["bg"], fg=tema["fg"], insertbackground=tema["fg"])
+        except:
+            pass
+   
+    elif isinstance(widget, tk.Text):
+        try:
+            widget.config(bg=tema["bg"], fg=tema["fg"], insertbackground=tema["fg"])
+        except:
+            pass
+    
+    else:
+        try:
+            if isinstance(widget, tk.Button):
+                widget.configure(bg=tema["button_bg"], fg=tema["button_fg"], activebackground=tema["bg"])
+            elif isinstance(widget, (tk.Label, tk.Frame, tk.Entry, tk.Listbox, tk.Canvas, tk.Checkbutton, tk.Radiobutton)):
+                widget.configure(bg=tema["bg"], fg=tema["fg"])
+            else:
+               
+                widget.configure(bg=tema["bg"], fg=tema.get("fg", "black"))
+        except:
+            
+            pass
 
-button_feedback = tk.Button(root, text="Deixar Feedback", command=feedback)
-button_feedback.pack(pady=10)
+def atualizar_interface():
+    """
+    Atualiza cores/estilos da interface atual (chamar após login/logout, troca de tema e quando abrir).
+    """
+    
+    if 'root' not in globals():
+        return
 
-# Iniciar a interface
-root.mainloop()
+    tema = sistema.temas.get(sistema.tema_atual, sistema.temas["Claro"])
+
+    
+    try:
+        root.configure(bg=tema["bg"])
+    except:
+        pass
+
+    
+    try:
+        style = ttk.Style()
+        
+        try:
+            style.theme_use("default")
+        except:
+            pass
+        style.configure("TNotebook", background=tema["bg"])
+        style.configure("TNotebook.Tab", background=tema["button_bg"], foreground=tema["button_fg"])
+        style.configure("TFrame", background=tema["bg"])
+        style.configure("TLabel", background=tema["bg"], foreground=tema["fg"])
+    except:
+        pass
+
+    
+    def recurse_apply(parent):
+        for w in parent.winfo_children():
+            _apply_theme_to_widget(w, tema)
+           
+            if isinstance(w, ttk.Notebook):
+                try:
+                    for i in range(w.index("end")):
+                        w.tab(i, padding=6)
+                except:
+                    pass
+            
+            try:
+                recurse_apply(w)
+            except:
+                pass
+
+    recurse_apply(root)
+
+    
+    try:
+        usuario_texto = sistema.usuarios[sistema.usuario_logado]['nome'] if sistema.usuario_logado else 'Não logado'
+        status_text = f"Usuário: {usuario_texto} | Total usuários: {len(sistema.usuarios)} | Mensagens: {len(sistema.mensagens)}"
+        status_label.config(text=status_text)
+    except:
+        pass
+
+
+def criar_interface():
+    global root, status_label, tema_var
+    root = tk.Tk()
+    root.title("Sistema Acadêmico Colaborativo com I.A - Premium")
+    root.geometry("500x600")
+    root.configure(bg=sistema.temas[sistema.tema_atual]["bg"])
+    
+    
+    header_frame = tk.Frame(root, bg=sistema.temas[sistema.tema_atual]["bg"])
+    header_frame.pack(fill=tk.X, padx=20, pady=10)
+    
+    titulo = tk.Label(header_frame, 
+                     text="🎓 SISTEMA ACADÊMICO PREMIUM", 
+                     font=("Arial", 16, "bold"),
+                     fg=sistema.temas[sistema.tema_atual]["fg"],
+                     bg=sistema.temas[sistema.tema_atual]["bg"])
+    titulo.pack(pady=5)
+    
+    subtitulo = tk.Label(header_frame,
+                        text="Plataforma Colaborativa com Inteligência Artificial",
+                        font=("Arial", 10),
+                        fg="#666666",
+                        bg=sistema.temas[sistema.tema_atual]["bg"])
+    subtitulo.pack()
+    
+   
+    tema_frame = tk.Frame(root, bg=sistema.temas[sistema.tema_atual]["bg"])
+    tema_frame.pack(pady=5)
+    
+    tk.Label(tema_frame, text="Tema:", bg=sistema.temas[sistema.tema_atual]["bg"]).pack(side=tk.LEFT)
+    tema_var = tk.StringVar(value=sistema.tema_atual)
+    tema_combo = ttk.Combobox(tema_frame, textvariable=tema_var, values=list(sistema.temas.keys()), width=10, state="readonly")
+    tema_combo.pack(side=tk.LEFT, padx=5)
+    tema_combo.bind('<<ComboboxSelected>>', lambda e: mudar_tema(tema_var.get()))
+    
+    
+    notebook = ttk.Notebook(root)
+    notebook.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+    
+   
+    frame_principal = ttk.Frame(notebook)
+    notebook.add(frame_principal, text="🏠 Principal")
+    
+   
+    frame_academico = ttk.Frame(notebook)
+    notebook.add(frame_academico, text="📚 Acadêmico")
+    
+    
+    frame_admin = ttk.Frame(notebook)
+    notebook.add(frame_admin, text="⚙️ Administrativo")
+    
+    
+    botoes_principal = [
+        ("👤 Cadastrar", cadastrar_usuario),
+        ("🔐 Login", login),
+        ("🚪 Logout", logout),
+        ("💬 Postar Fórum", postar_mensagem),
+        ("📋 Ver Fórum", ver_forum),
+        ("🤖 Assistente IA", chat_ia),
+        ("📊 Dashboard", dashboard_usuario)
+    ]
+    
+    for texto, comando in botoes_principal:
+        btn = tk.Button(frame_principal, text=texto, command=comando, width=20, height=2,
+                       bg=sistema.temas[sistema.tema_atual]["button_bg"],
+                       fg=sistema.temas[sistema.tema_atual]["button_fg"],
+                       font=("Arial", 10, "bold"))
+        btn.pack(pady=5, padx=20, fill=tk.X)
+    
+   
+    botoes_academico = [
+        ("📚 Materiais", recomendar_materiais),
+        ("📝 Minhas Mensagens", ver_minhas_mensagens),
+        ("📊 Minhas Notas", consultar_notas),
+        ("📅 Calendário", calendario_academico),
+        ("📁 Upload Arquivo", upload_arquivo),
+        ("📂 Ver Arquivos", visualizar_arquivos)
+    ]
+    
+    for texto, comando in botoes_academico:
+        btn = tk.Button(frame_academico, text=texto, command=comando, width=20, height=2,
+                       bg=sistema.temas[sistema.tema_atual]["button_bg"],
+                       fg=sistema.temas[sistema.tema_atual]["button_fg"],
+                       font=("Arial", 10, "bold"))
+        btn.pack(pady=5, padx=20, fill=tk.X)
+    
+    
+    botoes_admin = [
+        ("🎯 Gerenciar Notas", gerenciar_notas),
+        ("📈 Estatísticas", estatisticas_notas),
+        ("💾 Backup", backup_dados),
+        ("🔄 Restaurar", restaurar_dados)
+    ]
+    
+    for texto, comando in botoes_admin:
+        btn = tk.Button(frame_admin, text=texto, command=comando, width=20, height=2,
+                       bg=sistema.temas[sistema.tema_atual]["button_bg"],
+                       fg=sistema.temas[sistema.tema_atual]["button_fg"],
+                       font=("Arial", 10, "bold"))
+        btn.pack(pady=5, padx=20, fill=tk.X)
+    
+    
+    status_frame = tk.Frame(root, bg="#333333", height=20)
+    status_frame.pack(fill=tk.X, side=tk.BOTTOM)
+    
+    status_text = f"Usuário: {sistema.usuarios[sistema.usuario_logado]['nome'] if sistema.usuario_logado else 'Não logado'} | "
+    status_text += f"Total usuários: {len(sistema.usuarios)} | "
+    status_text += f"Mensagens: {len(sistema.mensagens)}"
+    
+    status_label = tk.Label(status_frame, text=status_text, fg="white", bg="#333333", font=("Arial", 8))
+    status_label.pack(side=tk.LEFT, padx=10)
+    
+   
+    atualizar_interface()
+    
+    root.mainloop()
+
+if __name__ == "__main__":
+    criar_interface()
